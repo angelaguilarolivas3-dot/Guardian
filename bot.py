@@ -52,3 +52,8 @@ async def on_reaction_add(reaction, user):
             f"Server: {reaction.message.guild.name}\n"
             f"Signals: {signals}"
         )
+
+TOKEN = os.getenv("BOT_TOKEN")
+if not TOKEN:
+    raise RuntimeError("BOT_TOKEN not set!")
+
