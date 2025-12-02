@@ -32,3 +32,22 @@ def get_recent_signals(guild_id, user_id, seconds=300):
         WHERE guild_id=? AND user_id=? AND timestamp > ?
     """, (guild_id, user_id, cutoff))
     return [row[0] for row in cursor.fetchall()]
+# -------------------------------------------------------------
+
+-- User warnings
+CREATE TABLE IF NOT EXISTS warnings (
+    guild_id INTEGER,
+    user_id INTEGER,
+    mod_id INTEGER,
+    reason TEXT,
+    timestamp REAL
+);
+
+-- Safety alerts (spam, autoclick, etc.)
+CREATE TABLE IF NOT EXISTS safety_alerts (
+    guild_id INTEGER,
+    user_id INTEGER,
+    type TEXT,
+    details TEXT,
+    timestamp REAL
+);
