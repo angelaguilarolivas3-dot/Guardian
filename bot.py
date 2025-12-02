@@ -165,7 +165,7 @@ async def warn(interaction: discord.Interaction, member: discord.Member, reason:
     embed.add_field(name="Reason", value=reason)
     embed.add_field(name="Total Warns", value=str(count))
 
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.response.send_message(embed=embed, ephemeral=False)
     await send_log(interaction.guild, embed)
 
 # ===================== /WARNINGS =====================
