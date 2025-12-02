@@ -92,35 +92,53 @@ async def on_reaction_add(reaction, user):
 async def help_cmd(interaction: discord.Interaction):
     embed = discord.Embed(
         title="🛡 Guardian Bot Help",
-        description="Community Safety & Moderation Bot",
+        description="A community safety & moderation bot designed to keep servers healthy.",
         color=discord.Color.blurple()
     )
 
     embed.add_field(
-        name="Moderation",
+        name="🛠 Moderation Commands",
         value=(
             "`/warn` – Warn a member\n"
-            "`/warnings` – View warnings\n"
+            "`/warnings` – View member warnings\n"
             "`/resetwarns` – Clear warnings\n"
-            "`/kick` – Kick member\n"
-            "`/ban` – Ban member"
+            "`/kick` – Kick a member\n"
+            "`/ban` – Ban a member"
         ),
         inline=False
     )
 
     embed.add_field(
-        name="Safety",
-        value="`/alerts` – View recent safety alerts",
+        name="🚨 Safety & Monitoring",
+        value=(
+            "`/alerts` – View recent safety alerts\n"
+            "Guardian automatically detects suspicious behavior."
+        ),
         inline=False
     )
 
     embed.add_field(
-        name="Config",
-        value="`/setlogchannel` – Set alerts log channel *(admin)*",
+        name="⚙️ Configuration",
+        value="`/setlogchannel` – Set where alerts are sent *(Admin only)*",
         inline=False
     )
 
-    embed.set_footer(text="Guardian • Safety first")
+    embed.add_field(
+        name="📜 Legal",
+        value=(
+            "[📄 Terms of Service]()\n"
+            "[🔒 Privacy Policy]()"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="🆘 Support Server",
+        value="[Join the Guardian Support Server](https://discord.gg/DSpz2pkZYN)",
+        inline=False
+    )
+
+    embed.set_footer(text="Guardian • Safety first • Built for the Discord Buildathon")
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
