@@ -1,10 +1,12 @@
 # bot.py — Guardian Safety / commuity health Bot
 
 import os
-import asyncio
+import time
 import discord
 from discord.ext import commands
 from discord import app_commands
+from flask import Flask
+from threading import Thread
 
 from detectors.reaction_patterns import check_reaction
 from detectors.join_leave import check_join
@@ -19,290 +21,213 @@ from db import (
     get_recent_alerts_for_guild,
 )
 
-# ---------- CONFIG ----------
-OWNER_ID = 1382858887786528803  # so the owner can do owner commands
+# ===================== RENDER WEB KEEP-ALIVE =====================
+app = Flask(__name__)
 
-# ---------- INTENTS ----------
+@app.route("/")
+def home():
+    return "Guardian bot is alive!"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+Thread(target=run_web, daemon=True).start()
+
+# ===================== BOT SETUP =====================
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.reactions = True
 
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-class GuardianBot(commands.Bot):
-    def __init__(self):
-        super().__init__(
-            command_prefix="!",  # not really used, but it works
-            intents=intents,
-        )
-
-    async def setup_hook(self):
-        # Global sync for all servers the bot is in
-        await self.tree.sync()
-        print("✅ Slash commands synced globally.")
+LOG_CHANNELS = {}  # guild_id -> channel_id
 
 
-bot = GuardianBot()
-
-
-# ---------- EVENTS ----------
-
+# ===================== READY =====================
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
+    await bot.tree.sync()
+    print(f"✅ Guardian online as {bot.user}")
 
 
+# ===================== EVENTS =====================
 @bot.event
-async def on_member_join(member: discord.Member):
-    # Run join detector
+async def on_member_join(member):
     check_join(member)
 
-
 @bot.event
-async def on_message(message: discord.Message):
+async def on_message(message):
     if message.author.bot:
         return
-
-    # Run spam / language detector
     check_message(message)
-
-    # Must call this or slash commands won’t work with message events
     await bot.process_commands(message)
 
-
 @bot.event
-async def on_reaction_add(reaction: discord.Reaction, user: discord.User):
-    if user.bot:
+async def on_reaction_add(reaction, user):
+    if user.bot or not reaction.message.guild:
         return
 
-    # TODO: measure actual reaction time; for now, use a dummy value
-    reaction_time_ms = 100.0
+    reaction_time_ms = 120  # placeholder
     await check_reaction(reaction, user, reaction_time_ms)
 
+    guild_id = reaction.message.guild.id
+    alerts = get_recent_alerts_for_guild(guild_id, 1)
 
-# ---------- MODERATION SLASH COMMANDS ----------
+    if alerts and guild_id in LOG_CHANNELS:
+        channel = bot.get_channel(LOG_CHANNELS[guild_id])
+        if channel:
+            u, t, d, ts = alerts[0]
+            await channel.send(
+                f"⚠️ **Guardian Alert**\n"
+                f"User: <@{u}>\n"
+                f"Type: `{t}`\n"
+                f"Details: {d}"
+            )
 
-def admin_only():
-    """Reusable admin permission check decorator."""
-    return app_commands.checks.has_permissions(administrator=True)
 
-
-@bot.tree.command(name="warn", description="Warn a member")
-@admin_only()
-@app_commands.describe(
-    member="Member to warn",
-    reason="Reason for the warning (optional)"
-)
-async def warn(
-    interaction: discord.Interaction,
-    member: discord.Member,
-    reason: str = "No reason provided."
-):
-    guild = interaction.guild
-    if guild is None:
-        await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
-        return
-
-    add_warning(
-        guild_id=guild.id,
-        user_id=member.id,
-        mod_id=interaction.user.id,
-        reason=reason,
-    )
-
-    count = get_warning_count(guild.id, member.id)
-
+# ===================== /HELP =====================
+@bot.tree.command(name="help", description="Show Guardian commands")
+async def help_cmd(interaction: discord.Interaction):
     embed = discord.Embed(
-        title="⚠️ Member Warned",
-        color=discord.Color.orange()
-    )
-    embed.add_field(name="Member", value=member.mention, inline=True)
-    embed.add_field(name="Moderator", value=interaction.user.mention, inline=True)
-    embed.add_field(name="Reason", value=reason, inline=False)
-    embed.set_footer(text=f"This user now has {count} warning(s).")
-
-    await interaction.response.send_message(embed=embed)
-
-
-@bot.tree.command(name="warnings", description="See how many warnings a member has")
-@admin_only()
-@app_commands.describe(member="Member to check")
-async def warnings(interaction: discord.Interaction, member: discord.Member):
-    guild = interaction.guild
-    if guild is None:
-        await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
-        return
-
-    count = get_warning_count(guild.id, member.id)
-    rows = get_warnings_for_user(guild.id, member.id)
-
-    if count == 0:
-        await interaction.response.send_message(
-            f"✅ {member.mention} has no warnings.",
-            ephemeral=True
-        )
-        return
-
-    embed = discord.Embed(
-        title=f"⚠️ Warnings for {member}",
-        color=discord.Color.orange()
-    )
-    embed.add_field(name="Total Warnings", value=str(count), inline=False)
-
-    for idx, (mod_id, reason, ts) in enumerate(rows, start=1):
-        embed.add_field(
-            name=f"#{idx} — by <@{mod_id}>",
-            value=reason or "No reason provided.",
-            inline=False
-        )
-
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
-@bot.tree.command(name="resetwarns", description="Reset warnings (member or entire server)")
-@admin_only()
-@app_commands.describe(
-    member="Member whose warnings to reset (leave empty to reset entire server)"
-)
-async def resetwarns(interaction: discord.Interaction, member: discord.Member | None = None):
-    guild = interaction.guild
-    if guild is None:
-        await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
-        return
-
-    if member is not None:
-        clear_warnings_for_user(guild.id, member.id)
-        await interaction.response.send_message(
-            f"✅ Cleared warnings for {member.mention}.",
-            ephemeral=True
-        )
-    else:
-        clear_warnings_for_guild(guild.id)
-        await interaction.response.send_message(
-            "✅ Cleared **all warnings** for this server.",
-            ephemeral=True
-        )
-
-
-@bot.tree.command(name="kick", description="Kick a member")
-@admin_only()
-@app_commands.describe(
-    member="Member to kick",
-    reason="Reason for kick"
-)
-async def kick(
-    interaction: discord.Interaction,
-    member: discord.Member,
-    reason: str = "No reason provided."
-):
-    guild = interaction.guild
-    if guild is None:
-        await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
-        return
-
-    try:
-        await member.kick(reason=reason)
-    except discord.Forbidden:
-        await interaction.response.send_message("❌ I don't have permission to kick that member.", ephemeral=True)
-        return
-
-    await interaction.response.send_message(
-        f"👢 {member.mention} was kicked.\n**Reason:** {reason}"
-    )
-
-
-@bot.tree.command(name="ban", description="Ban a member")
-@admin_only()
-@app_commands.describe(
-    member="Member to ban",
-    reason="Reason for ban"
-)
-async def ban(
-    interaction: discord.Interaction,
-    member: discord.Member,
-    reason: str = "No reason provided."
-):
-    guild = interaction.guild
-    if guild is None:
-        await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
-        return
-
-    try:
-        await member.ban(reason=reason)
-    except discord.Forbidden:
-        await interaction.response.send_message("❌ I don't have permission to ban that member.", ephemeral=True)
-        return
-
-    await interaction.response.send_message(
-        f"🔨 {member.mention} was banned.\n**Reason:** {reason}"
-    )
-
-
-# ---------- ALERTS COMMAND ----------
-
-@bot.tree.command(name="alerts", description="View recent safety alerts")
-@admin_only()
-async def alerts(interaction: discord.Interaction):
-    guild = interaction.guild
-    if guild is None:
-        await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
-        return
-
-    rows = get_recent_alerts_for_guild(guild.id, limit=15)
-
-    if not rows:
-        await interaction.response.send_message(
-            "✅ No recent alerts for this server.",
-            ephemeral=True
-        )
-        return
-
-    embed = discord.Embed(
-        title=f"🛡 Safety Alerts — {guild.name}",
-        description="Recent signals from Guardian's detectors.",
+        title="🛡 Guardian Bot Help",
+        description="Community Safety & Moderation Bot",
         color=discord.Color.blurple()
     )
 
-    for user_id, alert_type, details, ts in rows:
-        user_mention = f"<@{user_id}>"
-        short_details = (details[:150] + "…") if details and len(details) > 150 else (details or "No extra details.")
+    embed.add_field(
+        name="Moderation",
+        value=(
+            "`/warn` – Warn a member\n"
+            "`/warnings` – View warnings\n"
+            "`/resetwarns` – Clear warnings\n"
+            "`/kick` – Kick member\n"
+            "`/ban` – Ban member"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="Safety",
+        value="`/alerts` – View recent safety alerts",
+        inline=False
+    )
+
+    embed.add_field(
+        name="Config",
+        value="`/setlogchannel` – Set alerts log channel *(admin)*",
+        inline=False
+    )
+
+    embed.set_footer(text="Guardian • Safety first")
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# ===================== /SETLOGCHANNEL =====================
+@bot.tree.command(name="setlogchannel", description="Set channel for Guardian alerts (admin only)")
+@app_commands.checks.has_permissions(administrator=True)
+async def setlogchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+    LOG_CHANNELS[interaction.guild.id] = channel.id
+    await interaction.response.send_message(
+        f"✅ Alerts will be logged in {channel.mention}",
+        ephemeral=True
+    )
+
+
+# ===================== WARN =====================
+@bot.tree.command(name="warn", description="Warn a member")
+@app_commands.checks.has_permissions(moderate_members=True)
+async def warn(interaction, member: discord.Member, reason: str = "No reason provided"):
+    add_warning(interaction.guild.id, member.id, interaction.user.id, reason)
+    count = get_warning_count(interaction.guild.id, member.id)
+
+    await interaction.response.send_message(
+        f"⚠️ {member.mention} warned.\n"
+        f"Reason: {reason}\n"
+        f"Total warns: **{count}**"
+    )
+
+
+# ===================== WARNINGS =====================
+@bot.tree.command(name="warnings", description="View member warnings")
+@app_commands.checks.has_permissions(moderate_members=True)
+async def warnings(interaction, member: discord.Member):
+    count = get_warning_count(interaction.guild.id, member.id)
+    if count == 0:
+        await interaction.response.send_message("✅ No warnings.", ephemeral=True)
+        return
+
+    rows = get_warnings_for_user(interaction.guild.id, member.id)
+
+    embed = discord.Embed(
+        title=f"Warnings for {member}",
+        color=discord.Color.orange()
+    )
+
+    for mod_id, reason, ts in rows:
         embed.add_field(
-            name=f"{alert_type} — {user_mention}",
-            value=short_details,
+            name=f"By <@{mod_id}>",
+            value=reason,
             inline=False
         )
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-# ---------- ERROR HANDLER FOR APP COMMANDS ----------
-
-@bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    if isinstance(error, app_commands.MissingPermissions):
-        await interaction.response.send_message(
-            "❌ You don't have permission to use this command.",
-            ephemeral=True
-        )
+# ===================== RESET WARNS =====================
+@bot.tree.command(name="resetwarns", description="Reset warnings")
+@app_commands.checks.has_permissions(moderate_members=True)
+async def resetwarns(interaction, member: discord.Member | None = None):
+    if member:
+        clear_warnings_for_user(interaction.guild.id, member.id)
+        await interaction.response.send_message(f"✅ Cleared warnings for {member.mention}")
     else:
-        # Log and show generic error
-        print(f"[AppCommandError] {error}")
-        try:
-            await interaction.response.send_message(
-                "❌ Something went wrong while executing that command.",
-                ephemeral=True
-            )
-        except discord.InteractionResponded:
-            await interaction.followup.send(
-                "❌ Something went wrong while executing that command.",
-                ephemeral=True
-            )
+        clear_warnings_for_guild(interaction.guild.id)
+        await interaction.response.send_message("✅ Cleared all warnings in this server")
 
 
-# ---------- RUN BOT ----------
+# ===================== KICK =====================
+@bot.tree.command(name="kick", description="Kick a member")
+@app_commands.checks.has_permissions(kick_members=True)
+async def kick(interaction, member: discord.Member, reason: str = "No reason"):
+    await member.kick(reason=reason)
+    await interaction.response.send_message(f"👢 {member.mention} kicked.")
 
+
+# ===================== BAN =====================
+@bot.tree.command(name="ban", description="Ban a member")
+@app_commands.checks.has_permissions(ban_members=True)
+async def ban(interaction, member: discord.Member, reason: str = "No reason"):
+    await member.ban(reason=reason)
+    await interaction.response.send_message(f"🔨 {member.mention} banned.")
+
+
+# ===================== ALERTS =====================
+@bot.tree.command(name="alerts", description="View safety alerts")
+@app_commands.checks.has_permissions(moderate_members=True)
+async def alerts(interaction):
+    rows = get_recent_alerts_for_guild(interaction.guild.id)
+
+    if not rows:
+        await interaction.response.send_message("✅ No recent alerts.", ephemeral=True)
+        return
+
+    embed = discord.Embed(title="🛡 Guardian Alerts", color=discord.Color.red())
+    for u, t, d, ts in rows:
+        embed.add_field(
+            name=f"{t} — <@{u}>",
+            value=d,
+            inline=False
+        )
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# ===================== RUN =====================
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
-    raise RuntimeError("BOT_TOKEN not set!")
+    raise RuntimeError("BOT_TOKEN missing!")
 
 bot.run(TOKEN)
