@@ -126,8 +126,8 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(
         name="📜 Legal",
         value=(
-            "[📄 Terms of Service]()\n"
-            "[🔒 Privacy Policy]()"
+            "[📄 Terms of Service](https://github.com/angelaguilarolivas3-dot/Guardian/blob/main/docs/tos.md)\n"
+            "[🔒 Privacy Policy](https://github.com/angelaguilarolivas3-dot/Guardian/blob/main/docs/privacy.md)"
         ),
         inline=False
     )
