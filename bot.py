@@ -215,12 +215,23 @@ async def kick(interaction, member: discord.Member, reason: str = "No reason"):
 
 
 # ===================== BAN =====================
-@bot.tree.command(name="ban", description="Ban a member")
+@tree.command(name="ban", description="Ban a member")
 @app_commands.checks.has_permissions(ban_members=True)
-async def ban(interaction, member: discord.Member, reason: str = "No reason"):
+async def ban(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason"):
     await member.ban(reason=reason)
-    await interaction.response.send_message(f"🔨 {member.mention} banned.")
 
+    await interaction.response.send_message(
+        f"🔨 Banned {member.mention}",
+        ephemeral=True
+    )
+
+    await send_log(
+        interaction.guild,
+        f"🔨 **Ban**\n"
+        f"User: {member}\n"
+        f"Moderator: {interaction.user}\n"
+        f"Reason: {reason}"
+    )
 
 # ===================== ALERTS =====================
 @bot.tree.command(name="alerts", description="View safety alerts")
