@@ -135,7 +135,7 @@ async def setlogchannel(interaction: discord.Interaction, channel: discord.TextC
 
     await interaction.response.send_message(
         f"✅ Log channel set to {channel.mention}",
-        ephemeral=True
+        ephemeral=False
     )
 
 # ===================== /WARN =====================
@@ -185,7 +185,7 @@ async def warnings(interaction: discord.Interaction, member: discord.Member):
         color=discord.Color.yellow()
     )
 
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.response.send_message(embed=embed, ephemeral=False)
 
 # ===================== /KICK =====================
 @tree.command(name="kick", description="Kick a member")
@@ -220,7 +220,7 @@ async def ban(interaction: discord.Interaction, member: discord.Member, reason: 
     embed.add_field(name="Moderator", value=interaction.user)
     embed.add_field(name="Reason", value=reason)
 
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.response.send_message(embed=embed, ephemeral=False)
     await send_log(interaction.guild, embed)
 
 # ===================== /TIMEOUT =====================
@@ -240,7 +240,7 @@ async def timeout(interaction: discord.Interaction, member: discord.Member, minu
     embed.add_field(name="Duration", value=f"{minutes} minutes")
     embed.add_field(name="Reason", value=reason)
 
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.response.send_message(embed=embed, ephemeral=False)
     await send_log(interaction.guild, embed)
 
 # ===================== RUN =====================
