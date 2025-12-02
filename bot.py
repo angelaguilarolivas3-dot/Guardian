@@ -1,262 +1,250 @@
 # bot.py — Guardian Safety / commuity health Bot
 
-import os
-import time
+# ===================== IMPORTS =====================
 import discord
 from discord.ext import commands
 from discord import app_commands
+import sqlite3
+import os
 from flask import Flask
 from threading import Thread
+import datetime
 
-from detectors.reaction_patterns import check_reaction
-from detectors.join_leave import check_join
-from detectors.spam_language import check_message
+# ===================== CONFIG =====================
+TOKEN = os.getenv("BOT_TOKEN")
+OWNER_ID = 1382858887786528803
 
-from db import (
-    add_warning,
-    get_warning_count,
-    get_warnings_for_user,
-    clear_warnings_for_user,
-    clear_warnings_for_guild,
-    get_recent_alerts_for_guild,
-)
+SUPPORT_SERVER = "https://discord.gg/DSpz2pkZYN"
+TOS_LINK = "https://github.com/angelaguilarolivas3-dot/Guardian/blob/main/docs/tos.md"
+PRIVACY_LINK = "https://github.com/angelaguilarolivas3-dot/Guardian/blob/main/docs/privacy.md"
 
-# ===================== RENDER WEB KEEP-ALIVE =====================
+# ===================== FLASK (RENDER UPTIME) =====================
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Guardian bot is alive!"
+    return "Bot is running!"
 
-def run_web():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+Thread(target=lambda: app.run(host="0.0.0.0", port=10000), daemon=True).start()
 
-Thread(target=run_web, daemon=True).start()
+# ===================== DATABASE =====================
+conn = sqlite3.connect("bot.db", check_same_thread=False)
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS warns (
+    guild_id INTEGER,
+    user_id INTEGER,
+    count INTEGER DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id)
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS log_channels (
+    guild_id INTEGER PRIMARY KEY,
+    channel_id INTEGER
+)
+""")
+
+conn.commit()
 
 # ===================== BOT SETUP =====================
 intents = discord.Intents.default()
-intents.message_content = True
 intents.members = True
-intents.reactions = True
+intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+tree = bot.tree
 
-LOG_CHANNELS = {}  # guild_id -> channel_id
+# ===================== LOGGING HELPER =====================
+async def send_log(guild: discord.Guild, embed: discord.Embed):
+    cursor.execute(
+        "SELECT channel_id FROM log_channels WHERE guild_id = ?",
+        (guild.id,)
+    )
+    row = cursor.fetchone()
+    if not row:
+        return
 
+    channel = guild.get_channel(row[0])
+    if not channel:
+        return
 
-# ===================== READY =====================
-@bot.event
-async def on_ready():
-    await bot.tree.sync()
-    print(f"✅ Guardian online as {bot.user}")
-
+    try:
+        await channel.send(embed=embed)
+    except discord.Forbidden:
+        print("❌ Missing permissions to send logs")
 
 # ===================== EVENTS =====================
 @bot.event
-async def on_member_join(member):
-    check_join(member)
-
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-    check_message(message)
-    await bot.process_commands(message)
-
-@bot.event
-async def on_reaction_add(reaction, user):
-    if user.bot or not reaction.message.guild:
-        return
-
-    reaction_time_ms = 120  # placeholder
-    await check_reaction(reaction, user, reaction_time_ms)
-
-    guild_id = reaction.message.guild.id
-    alerts = get_recent_alerts_for_guild(guild_id, 1)
-
-    if alerts and guild_id in LOG_CHANNELS:
-        channel = bot.get_channel(LOG_CHANNELS[guild_id])
-        if channel:
-            u, t, d, ts = alerts[0]
-            await channel.send(
-                f"⚠️ **Guardian Alert**\n"
-                f"User: <@{u}>\n"
-                f"Type: `{t}`\n"
-                f"Details: {d}"
-            )
-
+async def on_ready():
+    await tree.sync()
+    print(f"✅ Logged in as {bot.user}")
 
 # ===================== /HELP =====================
-@bot.tree.command(name="help", description="Show Guardian commands")
+@tree.command(name="help", description="Show command list")
 async def help_cmd(interaction: discord.Interaction):
     embed = discord.Embed(
-        title="🛡 Guardian Bot Help",
-        description="A community safety & moderation bot designed to keep servers healthy.",
+        title="🛡 Guardian Bot — Help",
+        description="Moderation & community safety bot",
         color=discord.Color.blurple()
     )
 
     embed.add_field(
-        name="🛠 Moderation Commands",
-        value=(
-            "`/warn` – Warn a member\n"
-            "`/warnings` – View member warnings\n"
-            "`/resetwarns` – Clear warnings\n"
-            "`/kick` – Kick a member\n"
-            "`/ban` – Ban a member"
-        ),
+        name="🧑‍⚖️ Moderation",
+        value="""
+`/warn <user> <reason>`
+`/warnings <user>`
+`/kick <user> <reason>`
+`/ban <user> <reason>`
+`/timeout <user> <minutes>`
+""",
         inline=False
     )
 
     embed.add_field(
-        name="🚨 Safety & Monitoring",
-        value=(
-            "`/alerts` – View recent safety alerts\n"
-            "Guardian automatically detects suspicious behavior."
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="⚙️ Configuration",
-        value="`/setlogchannel` – Set where alerts are sent *(Admin only)*",
+        name="⚙️ Setup",
+        value="`/setlogchannel <channel>`",
         inline=False
     )
 
     embed.add_field(
         name="📜 Legal",
-        value=(
-            "[📄 Terms of Service](https://github.com/angelaguilarolivas3-dot/Guardian/blob/main/docs/tos.md)\n"
-            "[🔒 Privacy Policy](https://github.com/angelaguilarolivas3-dot/Guardian/blob/main/docs/privacy.md)"
-        ),
+        value=f"[Terms of Service]({TOS_LINK})\n[Privacy Policy]({PRIVACY_LINK})",
         inline=False
     )
 
     embed.add_field(
-        name="🆘 Support Server",
-        value="[Join the Guardian Support Server](https://discord.gg/DSpz2pkZYN)",
+        name="🛠 Support",
+        value=f"[Join Support Server]({SUPPORT_SERVER})",
         inline=False
     )
 
-    embed.set_footer(text="Guardian • Safety first • Built for the Discord Buildathon")
-
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
 
 # ===================== /SETLOGCHANNEL =====================
-@bot.tree.command(name="setlogchannel", description="Set channel for Guardian alerts (admin only)")
+@tree.command(name="setlogchannel", description="Set moderation log channel")
 @app_commands.checks.has_permissions(administrator=True)
 async def setlogchannel(interaction: discord.Interaction, channel: discord.TextChannel):
-    LOG_CHANNELS[interaction.guild.id] = channel.id
+    cursor.execute(
+        "INSERT OR REPLACE INTO log_channels VALUES (?, ?)",
+        (interaction.guild.id, channel.id)
+    )
+    conn.commit()
+
     await interaction.response.send_message(
-        f"✅ Alerts will be logged in {channel.mention}",
+        f"✅ Log channel set to {channel.mention}",
         ephemeral=True
     )
 
-
-# ===================== WARN =====================
-@bot.tree.command(name="warn", description="Warn a member")
+# ===================== /WARN =====================
+@tree.command(name="warn", description="Warn a member")
 @app_commands.checks.has_permissions(moderate_members=True)
-async def warn(interaction, member: discord.Member, reason: str = "No reason provided"):
-    add_warning(interaction.guild.id, member.id, interaction.user.id, reason)
-    count = get_warning_count(interaction.guild.id, member.id)
-
-    await interaction.response.send_message(
-        f"⚠️ {member.mention} warned.\n"
-        f"Reason: {reason}\n"
-        f"Total warns: **{count}**"
+async def warn(interaction: discord.Interaction, member: discord.Member, reason: str):
+    cursor.execute(
+        "SELECT count FROM warns WHERE guild_id = ? AND user_id = ?",
+        (interaction.guild.id, member.id)
     )
+    row = cursor.fetchone()
+    count = (row[0] if row else 0) + 1
 
-
-# ===================== WARNINGS =====================
-@bot.tree.command(name="warnings", description="View member warnings")
-@app_commands.checks.has_permissions(moderate_members=True)
-async def warnings(interaction, member: discord.Member):
-    count = get_warning_count(interaction.guild.id, member.id)
-    if count == 0:
-        await interaction.response.send_message("✅ No warnings.", ephemeral=True)
-        return
-
-    rows = get_warnings_for_user(interaction.guild.id, member.id)
+    cursor.execute(
+        "INSERT OR REPLACE INTO warns VALUES (?, ?, ?)",
+        (interaction.guild.id, member.id, count)
+    )
+    conn.commit()
 
     embed = discord.Embed(
-        title=f"Warnings for {member}",
-        color=discord.Color.orange()
+        title="⚠️ Member Warned",
+        color=discord.Color.orange(),
+        timestamp=datetime.datetime.utcnow()
     )
+    embed.add_field(name="User", value=member.mention)
+    embed.add_field(name="Moderator", value=interaction.user.mention)
+    embed.add_field(name="Reason", value=reason)
+    embed.add_field(name="Total Warns", value=str(count))
 
-    for mod_id, reason, ts in rows:
-        embed.add_field(
-            name=f"By <@{mod_id}>",
-            value=reason,
-            inline=False
-        )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_log(interaction.guild, embed)
+
+# ===================== /WARNINGS =====================
+@tree.command(name="warnings", description="View warnings")
+@app_commands.checks.has_permissions(moderate_members=True)
+async def warnings(interaction: discord.Interaction, member: discord.Member):
+    cursor.execute(
+        "SELECT count FROM warns WHERE guild_id = ? AND user_id = ?",
+        (interaction.guild.id, member.id)
+    )
+    row = cursor.fetchone()
+    count = row[0] if row else 0
+
+    embed = discord.Embed(
+        title="📋 Warning Count",
+        description=f"{member.mention} has **{count} warnings**.",
+        color=discord.Color.yellow()
+    )
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-
-# ===================== RESET WARNS =====================
-@bot.tree.command(name="resetwarns", description="Reset warnings")
-@app_commands.checks.has_permissions(moderate_members=True)
-async def resetwarns(interaction, member: discord.Member | None = None):
-    if member:
-        clear_warnings_for_user(interaction.guild.id, member.id)
-        await interaction.response.send_message(f"✅ Cleared warnings for {member.mention}")
-    else:
-        clear_warnings_for_guild(interaction.guild.id)
-        await interaction.response.send_message("✅ Cleared all warnings in this server")
-
-
-# ===================== KICK =====================
-@bot.tree.command(name="kick", description="Kick a member")
+# ===================== /KICK =====================
+@tree.command(name="kick", description="Kick a member")
 @app_commands.checks.has_permissions(kick_members=True)
-async def kick(interaction, member: discord.Member, reason: str = "No reason"):
+async def kick(interaction: discord.Interaction, member: discord.Member, reason: str):
     await member.kick(reason=reason)
-    await interaction.response.send_message(f"👢 {member.mention} kicked.")
 
+    embed = discord.Embed(
+        title="👢 Member Kicked",
+        color=discord.Color.red(),
+        timestamp=datetime.datetime.utcnow()
+    )
+    embed.add_field(name="User", value=member)
+    embed.add_field(name="Moderator", value=interaction.user)
+    embed.add_field(name="Reason", value=reason)
 
-# ===================== BAN =====================
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_log(interaction.guild, embed)
+
+# ===================== /BAN =====================
 @tree.command(name="ban", description="Ban a member")
 @app_commands.checks.has_permissions(ban_members=True)
-async def ban(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason"):
+async def ban(interaction: discord.Interaction, member: discord.Member, reason: str):
     await member.ban(reason=reason)
 
-    await interaction.response.send_message(
-        f"🔨 Banned {member.mention}",
-        ephemeral=True
+    embed = discord.Embed(
+        title="🔨 Member Banned",
+        color=discord.Color.dark_red(),
+        timestamp=datetime.datetime.utcnow()
     )
-
-    await send_log(
-        interaction.guild,
-        f"🔨 **Ban**\n"
-        f"User: {member}\n"
-        f"Moderator: {interaction.user}\n"
-        f"Reason: {reason}"
-    )
-
-# ===================== ALERTS =====================
-@bot.tree.command(name="alerts", description="View safety alerts")
-@app_commands.checks.has_permissions(moderate_members=True)
-async def alerts(interaction):
-    rows = get_recent_alerts_for_guild(interaction.guild.id)
-
-    if not rows:
-        await interaction.response.send_message("✅ No recent alerts.", ephemeral=True)
-        return
-
-    embed = discord.Embed(title="🛡 Guardian Alerts", color=discord.Color.red())
-    for u, t, d, ts in rows:
-        embed.add_field(
-            name=f"{t} — <@{u}>",
-            value=d,
-            inline=False
-        )
+    embed.add_field(name="User", value=member)
+    embed.add_field(name="Moderator", value=interaction.user)
+    embed.add_field(name="Reason", value=reason)
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_log(interaction.guild, embed)
 
+# ===================== /TIMEOUT =====================
+@tree.command(name="timeout", description="Timeout a member")
+@app_commands.checks.has_permissions(moderate_members=True)
+async def timeout(interaction: discord.Interaction, member: discord.Member, minutes: int, reason: str):
+    until = datetime.timedelta(minutes=minutes)
+    await member.timeout(until, reason=reason)
+
+    embed = discord.Embed(
+        title="⏳ Member Timed Out",
+        color=discord.Color.blue(),
+        timestamp=datetime.datetime.utcnow()
+    )
+    embed.add_field(name="User", value=member)
+    embed.add_field(name="Moderator", value=interaction.user)
+    embed.add_field(name="Duration", value=f"{minutes} minutes")
+    embed.add_field(name="Reason", value=reason)
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_log(interaction.guild, embed)
 
 # ===================== RUN =====================
-TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
-    raise RuntimeError("BOT_TOKEN missing!")
+    raise RuntimeError("❌ BOT_TOKEN missing")
 
 bot.run(TOKEN)
