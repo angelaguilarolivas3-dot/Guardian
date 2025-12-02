@@ -1,53 +1,116 @@
+# db.py
 import sqlite3
+import threading
 import time
 
-conn = sqlite3.connect("health.db", check_same_thread=False)
-cursor = conn.cursor()
+DB_PATH = "guardian.db"
 
-# Signals table
+conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+cursor = conn.cursor()
+lock = threading.Lock()
+
+# ---------- TABLES ----------
+
+# Warnings per server
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS signals (
-    guild_id INTEGER,
-    user_id INTEGER,
-    signal TEXT,
-    timestamp REAL
+CREATE TABLE IF NOT EXISTS warnings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    mod_id INTEGER NOT NULL,
+    reason TEXT,
+    timestamp REAL NOT NULL
+)
+""")
+
+# Safety alerts (from detectors)
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS safety_alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    details TEXT,
+    timestamp REAL NOT NULL
 )
 """)
 
 conn.commit()
 
 
-def add_signal(guild_id, user_id, signal):
-    cursor.execute(
-        "INSERT INTO signals VALUES (?, ?, ?, ?)",
-        (guild_id, user_id, signal, time.time())
-    )
-    conn.commit()
+# ---------- WARNINGS API ----------
+
+def add_warning(guild_id: int, user_id: int, mod_id: int, reason: str):
+    ts = time.time()
+    with lock:
+        cursor.execute(
+            "INSERT INTO warnings (guild_id, user_id, mod_id, reason, timestamp) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (guild_id, user_id, mod_id, reason, ts)
+        )
+        conn.commit()
 
 
-def get_recent_signals(guild_id, user_id, seconds=300):
-    cutoff = time.time() - seconds
-    cursor.execute("""
-        SELECT signal FROM signals
-        WHERE guild_id=? AND user_id=? AND timestamp > ?
-    """, (guild_id, user_id, cutoff))
-    return [row[0] for row in cursor.fetchall()]
-# -------------------------------------------------------------
+def get_warning_count(guild_id: int, user_id: int) -> int:
+    with lock:
+        cursor.execute(
+            "SELECT COUNT(*) FROM warnings WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id)
+        )
+        (count,) = cursor.fetchone()
+    return count
 
--- User warnings
-CREATE TABLE IF NOT EXISTS warnings (
-    guild_id INTEGER,
-    user_id INTEGER,
-    mod_id INTEGER,
-    reason TEXT,
-    timestamp REAL
-);
 
--- Safety alerts (spam, autoclick, etc.)
-CREATE TABLE IF NOT EXISTS safety_alerts (
-    guild_id INTEGER,
-    user_id INTEGER,
-    type TEXT,
-    details TEXT,
-    timestamp REAL
-);
+def get_warnings_for_user(guild_id: int, user_id: int, limit: int = 10):
+    with lock:
+        cursor.execute(
+            "SELECT mod_id, reason, timestamp "
+            "FROM warnings WHERE guild_id = ? AND user_id = ? "
+            "ORDER BY timestamp DESC LIMIT ?",
+            (guild_id, user_id, limit)
+        )
+        rows = cursor.fetchall()
+    return rows
+
+
+def clear_warnings_for_user(guild_id: int, user_id: int):
+    with lock:
+        cursor.execute(
+            "DELETE FROM warnings WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id)
+        )
+        conn.commit()
+
+
+def clear_warnings_for_guild(guild_id: int):
+    with lock:
+        cursor.execute(
+            "DELETE FROM warnings WHERE guild_id = ?",
+            (guild_id,)
+        )
+        conn.commit()
+
+
+# ---------- ALERTS API ----------
+
+def add_alert(guild_id: int, user_id: int, alert_type: str, details: str = ""):
+    ts = time.time()
+    with lock:
+        cursor.execute(
+            "INSERT INTO safety_alerts (guild_id, user_id, type, details, timestamp) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (guild_id, user_id, alert_type, details, ts)
+        )
+        conn.commit()
+
+
+def get_recent_alerts_for_guild(guild_id: int, limit: int = 20):
+    with lock:
+        cursor.execute(
+            "SELECT user_id, type, details, timestamp "
+            "FROM safety_alerts WHERE guild_id = ? "
+            "ORDER BY timestamp DESC LIMIT ?",
+            (guild_id, limit)
+        )
+        rows = cursor.fetchall()
+    return rows
