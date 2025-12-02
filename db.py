@@ -37,6 +37,10 @@ CREATE TABLE IF NOT EXISTS safety_alerts (
 
 conn.commit()
 
+CREATE TABLE IF NOT EXISTS log_channels (
+    guild_id INTEGER PRIMARY KEY,
+    channel_id INTEGER
+);
 
 # ---------- WARNINGS API ----------
 
