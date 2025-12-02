@@ -6,6 +6,19 @@ from detectors.reaction_patterns import check_reaction
 from detectors.join_leave import check_join
 from detectors.spam_language import check_message
 from db import get_recent_signals
+from flask import Flask
+from threading import Thread
+
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Guardian is running"
+
+def run_web():
+    app.run(host="0.0.0.0", port=10000)
+
+Thread(target=run_web, daemon=True).start()
 
 # ---------------- CONFIG ----------------
 OWNER_ID = 1382858887786528803
